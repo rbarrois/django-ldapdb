@@ -1,0 +1,3 @@
+-r requirements.txt
+
+mockldap>=0.1
