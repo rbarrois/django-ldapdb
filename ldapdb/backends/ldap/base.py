@@ -37,6 +37,7 @@ from django.db.backends import (BaseDatabaseFeatures, BaseDatabaseOperations,
                                 BaseDatabaseWrapper)
 from django.db.backends.creation import BaseDatabaseCreation
 
+from ldapdb import compat
 
 class DatabaseCreation(BaseDatabaseCreation):
     def create_test_db(self, verbosity=1, autoclobber=False):
@@ -146,5 +147,5 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         output = []
         for dn, attrs in results:
             if dn is not None:
-                output.append((dn.decode(self.charset), attrs))
+                output.append((compat.force_text(dn, self.charset), attrs))
         return output

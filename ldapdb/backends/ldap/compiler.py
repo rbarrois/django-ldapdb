@@ -99,6 +99,66 @@ def where_as_ldap(self):
     return sql_string, []
 
 
+class SortableEntry(object):
+    """Handle comparison between two LDAP entries for user-defined ordering."""
+
+    ASC = 1
+    DESC = -1
+
+    def __init__(self, entry, keys):
+        self.entry = entry
+        self.keys = keys
+        self.nb_keys = len(keys)
+
+    @classmethod
+    def from_entry(cls, entry, ordering_fields, connection):
+        """Create a SortableEntry from an entry and ordering fields."""
+        keys = []
+        for field, direction in ordering_fields:
+            attr = field.from_ldap(entry[1].get(field.db_column, []),
+                connection=connection)
+
+            # Case-insensitive
+            if hasattr(attr, 'lower'):
+                attr = attr.lower()
+
+            keys.append((attr, direction))
+        return cls(entry, keys)
+
+    @classmethod
+    def parse_orderings(cls, orderings, compiler):
+        """Convert an ordering list to a set of (field, direction)."""
+        for fieldname in orderings:
+            if fieldname.startswith('-'):
+                fieldname = fieldname[1:]
+                direction = cls.DESC
+            else:
+                direction = cls.ASC
+
+            if fieldname == 'pk':
+                fieldname = compiler.query.model._meta.pk.name
+
+            field = compiler.query.model._meta.get_field(fieldname)
+            yield field, direction
+
+    def __lt__(self, other):
+        for i in range(self.nb_keys):
+            key1, dir1 = self.keys[i]
+            key2, dir2 = other.keys[i]
+            assert dir1 == dir2
+
+            if key1 == key2:
+                continue
+
+            if dir1 == self.ASC:
+                return key1 < key2
+            else:
+                return key2 < key1
+
+        # All keys where equal
+        return False
+
+
 class SQLCompiler(object):
     def __init__(self, query, connection, using):
         self.query = query
@@ -174,30 +234,12 @@ class SQLCompiler(object):
         else:
             ordering = self.query.order_by or self.query.model._meta.ordering
 
-        def cmpvals(x, y):
-            for fieldname in ordering:
-                if fieldname.startswith('-'):
-                    fieldname = fieldname[1:]
-                    negate = True
-                else:
-                    negate = False
-                if fieldname == 'pk':
-                    fieldname = self.query.model._meta.pk.name
-                field = self.query.model._meta.get_field(fieldname)
-                attr_x = field.from_ldap(x[1].get(field.db_column, []),
-                                         connection=self.connection)
-                attr_y = field.from_ldap(y[1].get(field.db_column, []),
-                                         connection=self.connection)
-                # perform case insensitive comparison
-                if hasattr(attr_x, 'lower'):
-                    attr_x = attr_x.lower()
-                if hasattr(attr_y, 'lower'):
-                    attr_y = attr_y.lower()
-                val = negate and cmp(attr_y, attr_x) or cmp(attr_x, attr_y)
-                if val:
-                    return val
-            return 0
-        vals = sorted(vals, cmp=cmpvals)
+        ordering_fields = SortableEntry.parse_orderings(ordering, self)
+        sortable_vals = [
+            SortableEntry.from_entry(val, ordering_fields, self.connection)
+            for val in vals
+        ]
+        vals = [se.entry for se in sorted(sortable_vals)]
 
         # process results
         pos = 0
