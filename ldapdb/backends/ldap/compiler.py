@@ -128,6 +128,7 @@ class SortableEntry(object):
     @classmethod
     def parse_orderings(cls, orderings, compiler):
         """Convert an ordering list to a set of (field, direction)."""
+        parsed = []
         for fieldname in orderings:
             if fieldname.startswith('-'):
                 fieldname = fieldname[1:]
@@ -139,7 +140,8 @@ class SortableEntry(object):
                 fieldname = compiler.query.model._meta.pk.name
 
             field = compiler.query.model._meta.get_field(fieldname)
-            yield field, direction
+            parsed.append((field, direction))
+        return parsed
 
     def __lt__(self, other):
         for i in range(self.nb_keys):
@@ -191,7 +193,7 @@ class SQLCompiler(object):
             return None
 
         output = []
-        for alias, col in self.query.extra_select.iteritems():
+        for alias, col in self.query.extra_select.items():
             output.append(col[0])
         for key, aggregate in self.query.aggregate_select.items():
             if isinstance(aggregate, aggregates.Count):
