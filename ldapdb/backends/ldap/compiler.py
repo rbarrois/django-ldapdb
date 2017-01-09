@@ -123,7 +123,7 @@ class SQLCompiler(compiler.SQLCompiler):
             return
 
         try:
-            vals = self.connection.search_s(
+            vals = self.connection.batched_search_s(
                 base=lookup.base,
                 scope=lookup.scope,
                 filterstr=lookup.filterstr,
@@ -171,7 +171,7 @@ class SQLCompiler(compiler.SQLCompiler):
         attrlist = [x.db_column for x in fields if x.db_column]
 
         try:
-            vals = self.connection.search_s(
+            vals = self.connection.batched_search_s(
                 base=lookup.base,
                 scope=lookup.scope,
                 filterstr=lookup.filterstr,
@@ -280,7 +280,7 @@ class SQLDeleteCompiler(compiler.SQLDeleteCompiler, SQLCompiler):
             return
 
         try:
-            vals = self.connection.search_s(
+            vals = self.connection.batched_search_s(
                 base=lookup.base,
                 scope=lookup.scope,
                 filterstr=lookup.filterstr,

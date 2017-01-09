@@ -5,6 +5,7 @@
 from __future__ import unicode_literals
 
 import ldap
+import ldap.controls
 
 from django.db.backends.base.features import BaseDatabaseFeatures
 from django.db.backends.base.operations import BaseDatabaseOperations
@@ -180,6 +181,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         self.validation = DatabaseValidation(self)
         self.settings_dict['SUPPORTS_TRANSACTIONS'] = True
         self.autocommit = True
+        self.batch_size = None
 
     def close(self):
         if hasattr(self, 'validate_thread_sharing'):
@@ -208,7 +210,12 @@ class DatabaseWrapper(BaseDatabaseWrapper):
 
         options = conn_params['options']
         for opt, value in options.items():
-            connection.set_option(opt, value)
+            if opt.lower() == 'timeout':
+                connection.timeout = int(value)
+            elif opt.lower() == 'batch_size':
+                self.batch_size = int(value)
+            else:
+                connection.set_option(opt, value)
 
         if conn_params['tls']:
             connection.start_tls_s()
@@ -252,13 +259,48 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         cursor = self._cursor()
         return cursor.connection.rename_s(dn, newrdn)
 
-    def search_s(self, base, scope, filterstr='(objectClass=*)',
-                 attrlist=None):
+    def batched_search_s(self, base, scope, filterstr='(objectClass=*)',
+                         attrlist=None):
         cursor = self._cursor()
-        results = cursor.connection.search_s(base, scope, filterstr, attrlist)
+        timeout = cursor.connection.timeout
         output = []
-        for dn, attrs in results:
+
+        if self.batch_size is None:
+            # Note that search_s uses `cursor.connection.timeout` already
+            results = cursor.connection.search_s(base, scope, filterstr, attrlist)
             # skip referrals
-            if dn is not None:
-                output.append((dn, attrs))
+            output = [(dn, attrs) for dn, attrs in results if dn is not None]
+        else:
+            # Use global pagination value if needed
+            ldap_control = ldap.controls.SimplePagedResultsControl(True, self.batch_size, '')
+
+            # Fetch results
+            page = 0
+
+            while True:
+                msgid = cursor.connection.search_ext(
+                    base=base,
+                    scope=scope,
+                    filterstr=filterstr,
+                    attrlist=attrlist,
+                    serverctrls=[ldap_control],
+                    timeout=timeout,
+                )
+
+                _res_type, results, _res_msgid, server_controls = cursor.connection.result3(msgid, timeout=timeout)
+                page_controls = [ctrl for ctrl in server_controls if ctrl.controlType == ldap.CONTROL_PAGEDRESULTS]
+                if not page_controls:
+                    raise self.Database.DatabaseError("Server doesn't support paging (RFC2696)")
+
+                # skip referrals
+                output += [(dn, attrs) for dn, attrs in results if dn is not None]
+
+                page_control = page_controls[0]
+                page += 1
+                if page_control.cookie:
+                    ldap_control.cookie = page_control.cookie
+                else:
+                    # End of pages
+                    break
+
         return output
