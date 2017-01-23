@@ -181,7 +181,9 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         self.validation = DatabaseValidation(self)
         self.settings_dict['SUPPORTS_TRANSACTIONS'] = True
         self.autocommit = True
-        self.batch_size = None
+        # Default page size of 1000 items, ActiveDirectory's default
+        # See https://support.microsoft.com/en-us/help/315071/how-to-view-and-set-ldap-policy-in-active-directory-by-using-ntdsutil.exe
+        self.page_size = 1000
 
     def close(self):
         if hasattr(self, 'validate_thread_sharing'):
@@ -210,10 +212,10 @@ class DatabaseWrapper(BaseDatabaseWrapper):
 
         options = conn_params['options']
         for opt, value in options.items():
-            if opt.lower() == 'timeout':
+            if opt.lower() == 'query_timeout':
                 connection.timeout = int(value)
-            elif opt.lower() == 'batch_size':
-                self.batch_size = int(value)
+            elif opt.lower() == 'page_size':
+                self.page_size = int(value)
             else:
                 connection.set_option(opt, value)
 
@@ -259,48 +261,44 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         cursor = self._cursor()
         return cursor.connection.rename_s(dn, newrdn)
 
-    def batched_search_s(self, base, scope, filterstr='(objectClass=*)',
+    def search_s(self, base, scope, filterstr='(objectClass=*)',
                          attrlist=None):
         cursor = self._cursor()
-        timeout = cursor.connection.timeout
+        query_timeout = cursor.connection.timeout
         output = []
 
-        if self.batch_size is None:
-            # Note that search_s uses `cursor.connection.timeout` already
-            results = cursor.connection.search_s(base, scope, filterstr, attrlist)
-            # skip referrals
-            output = [(dn, attrs) for dn, attrs in results if dn is not None]
-        else:
-            # Use global pagination value if needed
-            ldap_control = ldap.controls.SimplePagedResultsControl(True, self.batch_size, '')
+        # Request pagination; don't fail if the server doesn't support it.
+        ldap_control = ldap.controls.SimplePagedResultsControl(
+            criticality=False,
+            size=self.page_size,
+            cookie='',
+        )
 
-            # Fetch results
-            page = 0
+        # Fetch results
+        page = 0
 
-            while True:
-                msgid = cursor.connection.search_ext(
-                    base=base,
-                    scope=scope,
-                    filterstr=filterstr,
-                    attrlist=attrlist,
-                    serverctrls=[ldap_control],
-                    timeout=timeout,
-                )
+        while True:
+            msgid = cursor.connection.search_ext(
+                base=base,
+                scope=scope,
+                filterstr=filterstr,
+                attrlist=attrlist,
+                serverctrls=[ldap_control],
+                timeout=query_timeout,
+            )
 
-                _res_type, results, _res_msgid, server_controls = cursor.connection.result3(msgid, timeout=timeout)
-                page_controls = [ctrl for ctrl in server_controls if ctrl.controlType == ldap.CONTROL_PAGEDRESULTS]
-                if not page_controls:
-                    raise self.Database.DatabaseError("Server doesn't support paging (RFC2696)")
+            _res_type, results, _res_msgid, server_controls = cursor.connection.result3(msgid, timeout=query_timeout)
+            page_controls = [ctrl for ctrl in server_controls if ctrl.controlType == ldap.CONTROL_PAGEDRESULTS]
 
+            for dn, attrs in results:
                 # skip referrals
-                output += [(dn, attrs) for dn, attrs in results if dn is not None]
+                if dn is not None:
+                    yield dn, attrs
 
-                page_control = page_controls[0]
-                page += 1
-                if page_control.cookie:
-                    ldap_control.cookie = page_control.cookie
-                else:
-                    # End of pages
-                    break
-
-        return output
+            page_control = page_controls[0]
+            page += 1
+            if page_control.cookie:
+                ldap_control.cookie = page_control.cookie
+            else:
+                # End of pages
+                break

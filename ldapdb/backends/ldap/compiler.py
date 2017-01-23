@@ -123,12 +123,14 @@ class SQLCompiler(compiler.SQLCompiler):
             return
 
         try:
-            vals = self.connection.batched_search_s(
+            vals = self.connection.search_s(
                 base=lookup.base,
                 scope=lookup.scope,
                 filterstr=lookup.filterstr,
                 attrlist=['dn'],
             )
+            # Flatten iterator
+            vals = list(vals)
         except ldap.NO_SUCH_OBJECT:
             vals = []
 
@@ -171,7 +173,7 @@ class SQLCompiler(compiler.SQLCompiler):
         attrlist = [x.db_column for x in fields if x.db_column]
 
         try:
-            vals = self.connection.batched_search_s(
+            vals = self.connection.search_s(
                 base=lookup.base,
                 scope=lookup.scope,
                 filterstr=lookup.filterstr,
@@ -280,7 +282,7 @@ class SQLDeleteCompiler(compiler.SQLDeleteCompiler, SQLCompiler):
             return
 
         try:
-            vals = self.connection.batched_search_s(
+            vals = self.connection.search_s(
                 base=lookup.base,
                 scope=lookup.scope,
                 filterstr=lookup.filterstr,
